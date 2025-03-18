@@ -25,87 +25,52 @@ async def list_tools() -> List[types.Tool]:
     """Return the list of all available MCP tools."""
     tools = []
     
-    tools.append(types.Tool(
-        name="get_scene_info",
-        description=UNITY_COMMANDS["get_scene_info"]["description"],
-        inputSchema={"type": "object", "properties": {}}
-    ))
-    
-    tools.append(types.Tool(
-        name="get_object_info",
-        description=UNITY_COMMANDS["get_object_info"]["description"],
-        inputSchema={
-            "type": "object",
-            "properties": {"object_name": {"type": "string"}},
-            "required": ["object_name"]
-        }
-    ))
-    
-    tools.append(types.Tool(
-        name="create_object",
-        description=UNITY_COMMANDS["create_object"]["description"],
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "type": {"type": "string", "enum": UNITY_OBJECT_TYPES},
-                "name": {"type": "string"},
-                "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                "scale": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
-            },
-            "required": ["type"]
-        }
-    ))
-    
-    tools.append(types.Tool(
-        name="modify_object",
-        description=UNITY_COMMANDS["modify_object"]["description"],
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                "scale": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                "visible": {"type": "boolean"}
-            },
-            "required": ["name"]
-        }
-    ))
-    
-    tools.append(types.Tool(
-        name="delete_object",
-        description=UNITY_COMMANDS["delete_object"]["description"],
-        inputSchema={
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"]
-        }
-    ))
-    
-    tools.append(types.Tool(
-        name="set_material",
-        description=UNITY_COMMANDS["set_material"]["description"],
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "object_name": {"type": "string"},
-                "material_name": {"type": "string"},
-                "color": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 4}
-            },
-            "required": ["object_name"]
-        }
-    ))
-    
-    tools.append(types.Tool(
-        name="execute_unity_code",
-        description=UNITY_COMMANDS["execute_unity_code"]["description"],
-        inputSchema={
-            "type": "object",
-            "properties": {"code": {"type": "string"}},
-            "required": ["code"]
-        }
-    ))
+    # Iterate through all commands in the config
+    for command_name, command_info in UNITY_COMMANDS.items():
+        # Create input schema
+        input_schema = {"type": "object", "properties": {}}
+        required_params = []
+        
+        # Add parameters to schema if they exist
+        if "params" in command_info:
+            for param_name, param_info in command_info["params"].items():
+                # Handle special cases for types
+                if param_info["type"] == "array":
+                    if "minItems" in param_info and "maxItems" in param_info:
+                        input_schema["properties"][param_name] = {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "minItems": param_info.get("minItems", 0),
+                            "maxItems": param_info.get("maxItems", 0)
+                        }
+                    else:
+                        input_schema["properties"][param_name] = {
+                            "type": "array",
+                            "items": {"type": "number"}
+                        }
+                elif param_info["type"] == "string" and param_name == "type" and command_name == "create_object":
+                    # Special case for create_object type enum
+                    input_schema["properties"][param_name] = {
+                        "type": "string",
+                        "enum": UNITY_OBJECT_TYPES
+                    }
+                else:
+                    input_schema["properties"][param_name] = {"type": param_info["type"]}
+                
+                # Add to required parameters if essential
+                if param_name in ["type", "object_name", "name", "code"] and command_name != "get_scene_info":
+                    required_params.append(param_name)
+        
+        # Add required parameters if any
+        if required_params:
+            input_schema["required"] = required_params
+        
+        # Create and add the tool
+        tools.append(types.Tool(
+            name=command_name,
+            description=command_info["description"],
+            inputSchema=input_schema
+        ))
     
     return tools
 
@@ -117,75 +82,38 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[types.TextCont
         
         # Some tools (like get_scene_info) don't require parameters
         # So we skip parameter validation for get_scene_info
-        if name != "get_scene_info":
-            # Check if parameters are null or empty
-            if arguments is None or not arguments:
-                logger.error(f"Parameters for {name} are empty or null")
-                raise ValueError(f"Parameters for {name} are empty or null")
+        if name != "get_scene_info" and name in UNITY_COMMANDS:
+            # Check if there are required parameters
+            if "params" in UNITY_COMMANDS[name]:
+                required_params = [param for param, info in UNITY_COMMANDS[name]["params"].items() 
+                                if param in ["type", "object_name", "name", "code"]]
+                
+                # Check if parameters are null or empty
+                if not arguments and required_params:
+                    logger.error(f"Parameters for {name} are empty or null")
+                    raise ValueError(f"Parameters for {name} are empty or null")
+                
+                # Check required parameters
+                for param in required_params:
+                    if param not in arguments or not arguments[param]:
+                        logger.error(f"Missing or empty '{param}' parameter for {name}")
+                        raise ValueError(f"Missing or empty '{param}' parameter for {name}")
+                
+                # Check array parameters
+                for param, info in UNITY_COMMANDS[name]["params"].items():
+                    if info["type"] == "array" and param in arguments and arguments[param] is not None:
+                        expected_length = 3  # Default for position, rotation, scale
+                        if param == "color":
+                            expected_length = 3 if len(arguments[param]) < 4 else 4  # RGB or RGBA
+                        
+                        if not isinstance(arguments[param], list) or len(arguments[param]) not in [expected_length, expected_length + 1]:
+                            logger.error(f"'{param}' parameter for {name} should be an array with {expected_length} or {expected_length+1} elements: {arguments[param]}")
+                            raise ValueError(f"'{param}' parameter should be an array with appropriate elements")
         
         # If arguments is None, create an empty dictionary
         if arguments is None:
             arguments = {}
         
-        # Convert string format to JSON (e.g., "create_object type=CUBE name=TestCube...")
-        if isinstance(arguments, str):
-            logger.warning(f"String parameter detected, converting to JSON: {arguments}")
-            try:
-                # Simple string parser (e.g., convert key=value format to JSON)
-                params = {}
-                parts = arguments.split()
-                method = parts[0]
-                for part in parts[1:]:
-                    if '=' in part:
-                        key, value = part.split('=', 1)
-                        if value.startswith('[') and value.endswith(']'):
-                            # Convert list format (e.g., [0,1,0]) to JSON list
-                            value = eval(value)  # Use with caution, consider using an alternative parser
-                        params[key] = value
-                arguments = {"method": method, "params": params}
-            except Exception as e:
-                logger.error(f"Error converting string to JSON: {e}")
-                raise ValueError(f"Error converting string to JSON: {e}")
-
-        # Special validation for create_object
-        if name == "create_object":
-            if "type" not in arguments or not arguments["type"]:
-                logger.error("Missing or empty 'type' parameter for create_object")
-                raise ValueError("Missing or empty 'type' parameter for create_object")
-            for key in ["location", "rotation", "scale"]:
-                if key in arguments and arguments[key] is not None:
-                    if not isinstance(arguments[key], list) or len(arguments[key]) != 3:
-                        logger.error(f"'{key}' parameter for create_object should be a numeric array with 3 elements: {arguments[key]}")
-                        raise ValueError(f"'{key}' parameter should be a numeric array with 3 elements")
-        
-        # Special validation for execute_unity_code
-        if name == "execute_unity_code":
-            if "code" not in arguments or not arguments["code"]:
-                logger.error("Missing or empty 'code' parameter for execute_unity_code")
-                raise ValueError("Missing or empty 'code' parameter for execute_unity_code")
-        
-        # Special validation for get_object_info
-        if name == "get_object_info":
-            if "object_name" not in arguments or not arguments["object_name"]:
-                logger.error("Missing or empty 'object_name' parameter for get_object_info")
-                raise ValueError("Missing or empty 'object_name' parameter for get_object_info")
-        
-        # Special validation for set_material
-        if name == "set_material":
-            if "object_name" not in arguments or not arguments["object_name"]:
-                logger.error("Missing or empty 'object_name' parameter for set_material")
-                raise ValueError("Missing or empty 'object_name' parameter for set_material")
-            if "color" in arguments and arguments["color"] is not None:
-                if not isinstance(arguments["color"], list) or len(arguments["color"]) not in [3, 4]:
-                    logger.error(f"'color' parameter for set_material should be a numeric array with 3 (RGB) or 4 (RGBA) elements: {arguments['color']}")
-                    raise ValueError("Color parameter should be a numeric array with 3 (RGB) or 4 (RGBA) elements")
-
-        # Special validation for delete_object
-        if name == "delete_object":
-            if "name" not in arguments or not arguments["name"]:
-                logger.error("Missing or empty 'name' parameter for delete_object")
-                raise ValueError("Missing or empty 'name' parameter for delete_object")
-
         # Call the Unity command (asynchronous call)
         result = await unity.send_command(name, arguments)
         
