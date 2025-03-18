@@ -1,0 +1,910 @@
+using System;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Tasks;
+using UnityEngine;
+using System.Collections.Generic;
+
+#if UNITY_2019_1_OR_NEWER
+using UnityEngine.SceneManagement;
+#endif
+
+public class UnityMCPServer : MonoBehaviour
+{
+    [SerializeField] private int port = 8080;
+    private TcpListener server;
+    private bool isRunning;
+
+    // JSON definitions
+    [Serializable]
+    private class JsonRpcRequest
+    {
+        public string jsonrpc = "2.0";
+        public string method;
+        public string paramsJson; // Parameters as JSON
+        public string id;
+    }
+
+    [Serializable]
+    private class JsonRpcResponse
+    {
+        public string jsonrpc = "2.0";
+        public string result; // Result as JSON
+        public string id;
+    }
+
+    [Serializable]
+    private class JsonRpcErrorResponse
+    {
+        public string jsonrpc = "2.0";
+        public JsonRpcError error;
+        public string id;
+    }
+
+    [Serializable]
+    private class JsonRpcError
+    {
+        public int code;
+        public string message;
+        public string data;
+    }
+
+    // Parameter classes
+    [Serializable]
+    private class CreateObjectParams
+    {
+        public string type;
+        public string name;
+        public float[] location;
+        public float[] rotation;
+        public float[] scale;
+    }
+
+    [Serializable]
+    private class ModifyObjectParams
+    {
+        public string name;
+        public float[] location;
+        public float[] rotation;
+        public float[] scale;
+        public bool? visible;
+    }
+
+    [Serializable]
+    private class GetObjectInfoParams
+    {
+        public string object_name;
+    }
+
+    [Serializable]
+    private class SetMaterialParams
+    {
+        public string object_name;
+        public string material_name;
+        public float[] color;
+    }
+
+    [Serializable]
+    private class DeleteObjectParams
+    {
+        public string name;
+    }
+
+    [Serializable]
+    private class ExecuteCodeParams
+    {
+        public string code;
+    }
+
+    void Start()
+    {
+        StartServer();
+    }
+
+    private async void StartServer()
+    {
+        try
+        {
+            server = new TcpListener(IPAddress.Any, port);
+            server.Start();
+            isRunning = true;
+            Debug.Log($"Unity MCP Server started, port: {port}");
+            
+            while (isRunning)
+            {
+                var client = await server.AcceptTcpClientAsync();
+                _ = HandleClientAsync(client); // Fire and forget
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Server error: {e.Message}");
+        }
+    }
+
+    private async Task HandleClientAsync(TcpClient client)
+    {
+        try
+        {
+            using (NetworkStream stream = client.GetStream())
+            {
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+
+                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
+                    Debug.Log($"Received message: {message}");
+
+                    var response = ProcessJsonRpcMessage(message);
+                    byte[] responseBytes = Encoding.UTF8.GetBytes(response);
+                    await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"Client handling error: {e.Message}. Client connection closed.");
+        }
+        finally
+        {
+            client.Close();
+            Debug.Log("Client connection closed.");
+        }
+    }
+
+    private string ProcessJsonRpcMessage(string message)
+    {
+        try
+        {
+            // Process JSON-RPC message - manual JSON parsing
+            JsonRpcRequest request = new JsonRpcRequest();
+            
+            // Extract key values from JSON in a simple way
+            var jsonObj = SimpleJsonParse(message);
+            request.jsonrpc = GetJsonValue(jsonObj, "jsonrpc");
+            request.method = GetJsonValue(jsonObj, "method");
+            request.id = GetJsonValue(jsonObj, "id");
+            
+            // Get params object as JSON
+            request.paramsJson = GetJsonObjectRaw(message, "params");
+            Debug.Log($"Extracted paramsJson: {request.paramsJson}");
+            
+            // Call method and get result
+            var resultObj = ExecuteMethod(request.method, request.paramsJson);
+            
+            // Create JSON-RPC response
+            var response = new JsonRpcResponse
+            {
+                jsonrpc = "2.0",
+                id = request.id,
+                result = JsonUtility.ToJson(resultObj)
+            };
+            
+            return JsonUtility.ToJson(response);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"JSON-RPC processing error: {e.Message}");
+            var errorResponse = new JsonRpcErrorResponse
+            {
+                jsonrpc = "2.0",
+                id = null,
+                error = new JsonRpcError
+                {
+                    code = -32603,
+                    message = e.Message
+                }
+            };
+            
+            return JsonUtility.ToJson(errorResponse);
+        }
+    }
+
+    private Dictionary<string, string> SimpleJsonParse(string json)
+    {
+        var result = new Dictionary<string, string>();
+        int i = 0;
+        
+        // Skip any whitespace or opening braces
+        while (i < json.Length && (char.IsWhiteSpace(json[i]) || json[i] == '{'))
+            i++;
+            
+        while (i < json.Length)
+        {
+            // Skip whitespace
+            while (i < json.Length && char.IsWhiteSpace(json[i]))
+                i++;
+                
+            if (i >= json.Length || json[i] == '}')
+                break;
+                
+            // Read key
+            if (json[i] != '"')
+            {
+                Debug.LogError($"Expected '\"' at position {i}");
+                break;
+            }
+            
+            i++; // Skip opening quote
+            int keyStart = i;
+            
+            while (i < json.Length && json[i] != '"')
+                i++;
+                
+            if (i >= json.Length)
+            {
+                Debug.LogError("Unexpected end of JSON while parsing key");
+                break;
+            }
+            
+            string key = json.Substring(keyStart, i - keyStart);
+            i++; // Skip closing quote
+            
+            // Skip whitespace and colon
+            while (i < json.Length && (char.IsWhiteSpace(json[i]) || json[i] == ':'))
+                i++;
+                
+            if (i >= json.Length)
+            {
+                Debug.LogError("Unexpected end of JSON while looking for value");
+                break;
+            }
+            
+            // Read value
+            string value;
+            
+            if (json[i] == '"')
+            {
+                i++; // Skip opening quote
+                int valueStart = i;
+                
+                while (i < json.Length && json[i] != '"')
+                    i++;
+                    
+                if (i >= json.Length)
+                {
+                    Debug.LogError("Unexpected end of JSON while parsing string value");
+                    break;
+                }
+                
+                value = json.Substring(valueStart, i - valueStart);
+                i++; // Skip closing quote
+            }
+            else if (json[i] == '{' || json[i] == '[')
+            {
+                // Skip complex objects/arrays for now
+                int depth = 1;
+                int valueStart = i;
+                i++;
+                
+                while (i < json.Length && depth > 0)
+                {
+                    if (json[i] == '{' || json[i] == '[')
+                        depth++;
+                    else if (json[i] == '}' || json[i] == ']')
+                        depth--;
+                        
+                    i++;
+                }
+                
+                value = json.Substring(valueStart, i - valueStart);
+            }
+            else
+            {
+                // Number, boolean, or null
+                int valueStart = i;
+                
+                while (i < json.Length && ",}".IndexOf(json[i]) == -1)
+                    i++;
+                    
+                value = json.Substring(valueStart, i - valueStart).Trim();
+            }
+            
+            result[key] = value;
+            
+            // Skip comma or end of object
+            while (i < json.Length && (char.IsWhiteSpace(json[i]) || json[i] == ','))
+                i++;
+        }
+        
+        return result;
+    }
+
+    private string GetJsonValue(Dictionary<string, string> jsonObj, string key)
+    {
+        if (jsonObj.ContainsKey(key))
+            return jsonObj[key];
+            
+        return null;
+    }
+
+    private string GetJsonObjectRaw(string json, string key)
+    {
+        int keyIndex = json.IndexOf($"\"{key}\"");
+        if (keyIndex == -1)
+            return "{}"; // Return empty object
+            
+        int colonIndex = json.IndexOf(':', keyIndex);
+        if (colonIndex == -1)
+            return "{}";
+            
+        int valueStart = colonIndex + 1;
+        
+        // Skip whitespace
+        while (valueStart < json.Length && char.IsWhiteSpace(json[valueStart]))
+            valueStart++;
+            
+        if (valueStart >= json.Length)
+            return "{}";
+            
+        // Not an object or array, return empty object
+        if (json[valueStart] != '{' && json[valueStart] != '[')
+            return "{}";
+            
+        char closingChar = json[valueStart] == '{' ? '}' : ']';
+        int depth = 1;
+        int valueEnd = valueStart + 1;
+        
+        while (valueEnd < json.Length && depth > 0)
+        {
+            if (json[valueEnd] == json[valueStart])
+                depth++;
+            else if (json[valueEnd] == closingChar)
+                depth--;
+                
+            valueEnd++;
+        }
+        
+        if (depth != 0)
+            return "{}"; // Unbalanced brackets
+            
+        return json.Substring(valueStart, valueEnd - valueStart);
+    }
+
+    private object ExecuteMethod(string method, string paramsJson)
+    {
+        Debug.Log($"Executing method: {method} with params: {paramsJson}");
+        
+        // get_scene_info gibi parametre gerektirmeyen metodlar için özel kontrol
+        bool requiresParameters = method != "get_scene_info";
+        
+        // paramsJson kontrolü (gerekli ise)
+        if (requiresParameters)
+        {
+            if (string.IsNullOrEmpty(paramsJson) || paramsJson == "{}")
+            {
+                Debug.LogError($"ExecuteMethod: Missing parameters for method {method}");
+                throw new Exception($"ExecuteMethod: Missing parameters for method {method}");
+            }
+        }
+        
+        switch (method)
+        {
+            case "get_scene_info":
+                return GetSceneInfo();
+            
+            case "get_object_info":
+                var objParams = JsonUtility.FromJson<GetObjectInfoParams>(paramsJson);
+                if (objParams == null || string.IsNullOrEmpty(objParams.object_name))
+                {
+                    Debug.LogError("get_object_info: object_name is null or empty");
+                    throw new Exception("get_object_info: object_name is null or empty");
+                }
+                return GetObjectInfo(objParams.object_name);
+            
+            case "create_object":
+                var createParams = JsonUtility.FromJson<CreateObjectParams>(paramsJson);
+                if (createParams == null)
+                {
+                    Debug.LogError("create_object: createParams is null after JSON deserialization");
+                    throw new Exception("create_object: createParams is null after JSON deserialization");
+                }
+                Debug.Log($"CreateObject params - type: {createParams.type}, name: {createParams.name}, location: {(createParams.location != null ? string.Join(",", createParams.location) : "null")}");
+                return CreateObject(createParams);
+            
+            case "modify_object":
+                var modifyParams = JsonUtility.FromJson<ModifyObjectParams>(paramsJson);
+                if (modifyParams == null || string.IsNullOrEmpty(modifyParams.name))
+                {
+                    Debug.LogError("modify_object: name is null or empty");
+                    throw new Exception("modify_object: name is null or empty");
+                }
+                return ModifyObject(modifyParams);
+                
+            case "delete_object":
+                var deleteParams = JsonUtility.FromJson<DeleteObjectParams>(paramsJson);
+                if (deleteParams == null || string.IsNullOrEmpty(deleteParams.name))
+                {
+                    Debug.LogError("delete_object: name is null or empty");
+                    throw new Exception("delete_object: name is null or empty");
+                }
+                return DeleteObject(deleteParams.name);
+                
+            case "set_material":
+                var materialParams = JsonUtility.FromJson<SetMaterialParams>(paramsJson);
+                if (materialParams == null || string.IsNullOrEmpty(materialParams.object_name))
+                {
+                    Debug.LogError("set_material: object_name is null or empty");
+                    throw new Exception("set_material: object_name is null or empty");
+                }
+                return SetMaterial(materialParams);
+                
+            case "execute_unity_code":
+                var codeParams = JsonUtility.FromJson<ExecuteCodeParams>(paramsJson);
+                if (codeParams == null || string.IsNullOrEmpty(codeParams.code))
+                {
+                    Debug.LogError("execute_unity_code: code is null or empty");
+                    throw new Exception("execute_unity_code: code is null or empty");
+                }
+                return ExecuteUnityCode(codeParams);
+            
+            default:
+                Debug.LogError($"Unknown method: {method}");
+                throw new Exception($"Unknown method: {method}");
+        }
+    }
+
+    // Result Classes
+    [Serializable]
+    private class WarningResult
+    {
+        public string warning;
+    }
+
+    [Serializable]
+    private class ObjectResult
+    {
+        public bool success;
+        public string name;
+        public float[] position;
+        public float[] rotation;
+        public float[] scale;
+        public bool active;
+    }
+    
+    [Serializable]
+    private class DeleteResult
+    {
+        public bool success;
+        public string message;
+    }
+    
+    [Serializable]
+    private class MaterialResult
+    {
+        public bool success;
+        public string objectName;
+        public string materialName;
+        public float[] color;
+    }
+    
+    [Serializable]
+    private class SceneInfoResult
+    {
+        public string name;
+        public string path;
+        public bool isDirty;
+        public bool isLoaded;
+        public int buildIndex;
+        public int rootCount;
+        public List<SceneObjectInfo> rootObjects;
+    }
+    
+    [Serializable]
+    private class SceneObjectInfo
+    {
+        public string name;
+        public bool activeSelf;
+        public string tag;
+        public int layer;
+        public int childCount;
+    }
+    
+    [Serializable]
+    private class ObjectInfoResult
+    {
+        public string name;
+        public bool activeSelf;
+        public bool activeInHierarchy;
+        public string tag;
+        public int layer;
+        public string layerName;
+        public float[] position;
+        public float[] rotation;
+        public float[] scale;
+        public bool hasParent;
+        public string parentName;
+        public int childCount;
+        public List<string> children;
+        public List<ComponentInfo> components;
+    }
+    
+    [Serializable]
+    private class ComponentInfo
+    {
+        public string type;
+        public bool enabled;
+    }
+
+    // Get scene info
+    private SceneInfoResult GetSceneInfo()
+    {
+#if UNITY_2019_1_OR_NEWER
+        var activeScene = SceneManager.GetActiveScene();
+        var rootObjects = activeScene.GetRootGameObjects();
+        
+        var result = new SceneInfoResult
+        {
+            name = activeScene.name,
+            path = activeScene.path,
+            isDirty = activeScene.isDirty,
+            isLoaded = activeScene.isLoaded,
+            buildIndex = activeScene.buildIndex,
+            rootCount = rootObjects.Length,
+            rootObjects = new List<SceneObjectInfo>()
+        };
+        
+        foreach (var obj in rootObjects)
+        {
+            result.rootObjects.Add(new SceneObjectInfo
+            {
+                name = obj.name,
+                activeSelf = obj.activeSelf,
+                tag = obj.tag,
+                layer = obj.layer,
+                childCount = obj.transform.childCount
+            });
+        }
+        
+        return result;
+#else
+        return new SceneInfoResult { 
+            name = "Unknown", 
+            path = "Unknown",
+            isDirty = false,
+            isLoaded = true,
+            buildIndex = -1,
+            rootCount = 0,
+            rootObjects = new List<SceneObjectInfo>()
+        };
+#endif
+    }
+
+    // Get object info
+    private ObjectInfoResult GetObjectInfo(string objectName)
+    {
+        var obj = GameObject.Find(objectName);
+        
+        if (obj == null)
+        {
+            Debug.LogError($"GetObjectInfo: Object '{objectName}' not found");
+            throw new Exception($"Object '{objectName}' not found");
+        }
+        
+        var result = new ObjectInfoResult
+        {
+            name = obj.name,
+            activeSelf = obj.activeSelf,
+            activeInHierarchy = obj.activeInHierarchy,
+            tag = obj.tag,
+            layer = obj.layer,
+            layerName = LayerMask.LayerToName(obj.layer),
+            position = new float[] { obj.transform.position.x, obj.transform.position.y, obj.transform.position.z },
+            rotation = new float[] { obj.transform.eulerAngles.x, obj.transform.eulerAngles.y, obj.transform.eulerAngles.z },
+            scale = new float[] { obj.transform.localScale.x, obj.transform.localScale.y, obj.transform.localScale.z },
+            hasParent = obj.transform.parent != null,
+            parentName = obj.transform.parent != null ? obj.transform.parent.name : "",
+            childCount = obj.transform.childCount,
+            children = new List<string>(),
+            components = new List<ComponentInfo>()
+        };
+        
+        // Add children
+        for (int i = 0; i < obj.transform.childCount; i++)
+        {
+            result.children.Add(obj.transform.GetChild(i).name);
+        }
+        
+        // Add components
+        var components = obj.GetComponents<Component>();
+        foreach (var component in components)
+        {
+            if (component != null)
+            {
+                var compInfo = new ComponentInfo
+                {
+                    type = component.GetType().Name
+                };
+                
+                // Check if component is a Behaviour
+                var behaviour = component as Behaviour;
+                if (behaviour != null)
+                {
+                    compInfo.enabled = behaviour.enabled;
+                }
+                else
+                {
+                    compInfo.enabled = true; // Non-behaviours are always enabled
+                }
+                
+                result.components.Add(compInfo);
+            }
+        }
+        
+        return result;
+    }
+
+    // Create object
+    private ObjectResult CreateObject(CreateObjectParams parameters)
+    {
+        if (parameters == null)
+        {
+            Debug.LogError("CreateObject: Parameters are null");
+            throw new Exception("CreateObject: Parameters are null");
+        }
+        
+        if (string.IsNullOrEmpty(parameters.type))
+        {
+            Debug.LogError("CreateObject: type is null or empty");
+            throw new Exception("CreateObject: type is null or empty");
+        }
+        
+        // Object name not specified, create one
+        string objectName = !string.IsNullOrEmpty(parameters.name) ? parameters.name : $"{parameters.type}_{Guid.NewGuid().ToString().Substring(0, 8)}";
+        
+        // Create object
+        GameObject newObject = null;
+        
+        switch (parameters.type.ToUpper())
+        {
+            case "CUBE":
+                newObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                break;
+            case "SPHERE":
+                newObject = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                break;
+            case "CYLINDER":
+                newObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                break;
+            case "PLANE":
+                newObject = GameObject.CreatePrimitive(PrimitiveType.Plane);
+                break;
+            case "CAPSULE":
+                newObject = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                break;
+            case "QUAD":
+                newObject = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                break;
+            case "EMPTY":
+                newObject = new GameObject();
+                break;
+            default:
+                Debug.LogError($"CreateObject: Unknown object type: {parameters.type}");
+                throw new Exception($"CreateObject: Unknown object type: {parameters.type}");
+        }
+        
+        newObject.name = objectName;
+        
+        // Set position, rotation and scale
+        if (parameters.location != null && parameters.location.Length == 3)
+            newObject.transform.position = new Vector3(parameters.location[0], parameters.location[1], parameters.location[2]);
+        else
+            newObject.transform.position = Vector3.zero; // Default position
+        
+        if (parameters.rotation != null && parameters.rotation.Length == 3)
+            newObject.transform.eulerAngles = new Vector3(parameters.rotation[0], parameters.rotation[1], parameters.rotation[2]);
+        else
+            newObject.transform.eulerAngles = Vector3.zero; // Default rotation
+        
+        if (parameters.scale != null && parameters.scale.Length == 3)
+            newObject.transform.localScale = new Vector3(parameters.scale[0], parameters.scale[1], parameters.scale[2]);
+        else
+            newObject.transform.localScale = Vector3.one; // Default scale
+        
+#if UNITY_2019_1_OR_NEWER
+        if (!newObject.scene.IsValid() || newObject.scene != SceneManager.GetActiveScene())
+        {
+            SceneManager.MoveGameObjectToScene(newObject, SceneManager.GetActiveScene());
+            Debug.Log($"Moved object {newObject.name} to active scene");
+        }
+#endif
+
+        // Add debug log
+        Debug.Log($"Created object: {newObject.name} at position {newObject.transform.position}, active: {newObject.activeSelf}");
+        
+        return new ObjectResult
+        {
+            success = true,
+            name = newObject.name,
+            position = new float[] { newObject.transform.position.x, newObject.transform.position.y, newObject.transform.position.z },
+            rotation = new float[] { newObject.transform.eulerAngles.x, newObject.transform.eulerAngles.y, newObject.transform.eulerAngles.z },
+            scale = new float[] { newObject.transform.localScale.x, newObject.transform.localScale.y, newObject.transform.localScale.z },
+            active = newObject.activeSelf
+        };
+    }
+
+    // Modify object
+    private ObjectResult ModifyObject(ModifyObjectParams parameters)
+    {
+        if (parameters == null || string.IsNullOrEmpty(parameters.name))
+        {
+            Debug.LogError("ModifyObject: name is null or empty");
+            throw new Exception("ModifyObject: name is null or empty");
+        }
+        
+        var obj = GameObject.Find(parameters.name);
+        
+        if (obj == null)
+        {
+            Debug.LogError($"ModifyObject: Object '{parameters.name}' not found");
+            throw new Exception($"Object '{parameters.name}' not found");
+        }
+        
+        // Position, rotation, scale and visibility settings
+        if (parameters.location != null && parameters.location.Length == 3)
+            obj.transform.position = new Vector3(parameters.location[0], parameters.location[1], parameters.location[2]);
+            
+        if (parameters.rotation != null && parameters.rotation.Length == 3)
+            obj.transform.eulerAngles = new Vector3(parameters.rotation[0], parameters.rotation[1], parameters.rotation[2]);
+            
+        if (parameters.scale != null && parameters.scale.Length == 3)
+            obj.transform.localScale = new Vector3(parameters.scale[0], parameters.scale[1], parameters.scale[2]);
+            
+        if (parameters.visible.HasValue)
+            obj.SetActive(parameters.visible.Value);
+            
+        Debug.Log($"Modified object: {obj.name}, position: {obj.transform.position}, active: {obj.activeSelf}");
+        
+        return new ObjectResult
+        {
+            success = true,
+            name = obj.name,
+            position = new float[] { obj.transform.position.x, obj.transform.position.y, obj.transform.position.z },
+            rotation = new float[] { obj.transform.eulerAngles.x, obj.transform.eulerAngles.y, obj.transform.eulerAngles.z },
+            scale = new float[] { obj.transform.localScale.x, obj.transform.localScale.y, obj.transform.localScale.z },
+            active = obj.activeSelf
+        };
+    }
+
+    // Delete object
+    private DeleteResult DeleteObject(string objectName)
+    {
+        if (string.IsNullOrEmpty(objectName))
+        {
+            Debug.LogError("DeleteObject: objectName is null or empty");
+            throw new Exception("DeleteObject: objectName is null or empty");
+        }
+        
+        var obj = GameObject.Find(objectName);
+        
+        if (obj == null)
+        {
+            Debug.LogError($"DeleteObject: Object '{objectName}' not found");
+            throw new Exception($"Object '{objectName}' not found");
+        }
+        
+        Destroy(obj);
+        Debug.Log($"Deleted object: {objectName}");
+        
+        return new DeleteResult
+        {
+            success = true,
+            message = $"Object '{objectName}' deleted successfully"
+        };
+    }
+
+    // Set material
+    private MaterialResult SetMaterial(SetMaterialParams parameters)
+    {
+        if (parameters == null || string.IsNullOrEmpty(parameters.object_name))
+        {
+            Debug.LogError("SetMaterial: object_name is null or empty");
+            throw new Exception("SetMaterial: object_name is null or empty");
+        }
+        
+        var obj = GameObject.Find(parameters.object_name);
+        
+        if (obj == null)
+        {
+            Debug.LogError($"SetMaterial: Object '{parameters.object_name}' not found");
+            throw new Exception($"Object '{parameters.object_name}' not found");
+        }
+        
+        var renderer = obj.GetComponent<Renderer>();
+        
+        if (renderer == null)
+        {
+            Debug.LogError($"SetMaterial: Object '{parameters.object_name}' has no Renderer component");
+            throw new Exception($"Object '{parameters.object_name}' has no Renderer component");
+        }
+        
+        // Material name specified, find and apply it
+        if (!string.IsNullOrEmpty(parameters.material_name))
+        {
+            var material = Resources.Load<Material>(parameters.material_name);
+            
+            if (material != null)
+            {
+                renderer.material = material;
+                Debug.Log($"Applied material '{parameters.material_name}' to object '{parameters.object_name}'");
+            }
+            else
+            {
+                Debug.LogWarning($"Material '{parameters.material_name}' not found, creating a new material");
+                renderer.material = new Material(Shader.Find("Standard"));
+                renderer.material.name = parameters.material_name;
+            }
+        }
+        else
+        {
+            // Material name not specified and no current material, create a new material
+            if (renderer.material == null)
+            {
+                renderer.material = new Material(Shader.Find("Standard"));
+                renderer.material.name = $"Material_{parameters.object_name}";
+            }
+        }
+        
+        // Color specified, change material color
+        if (parameters.color != null)
+        {
+            if (parameters.color.Length >= 3)
+            {
+                float r = parameters.color[0];
+                float g = parameters.color[1];
+                float b = parameters.color[2];
+                float a = parameters.color.Length >= 4 ? parameters.color[3] : 1.0f;
+                
+                renderer.material.color = new Color(r, g, b, a);
+                Debug.Log($"Set color of object '{parameters.object_name}' to ({r}, {g}, {b}, {a})");
+            }
+            else
+            {
+                Debug.LogError("SetMaterial: Color array must have at least 3 elements (RGB)");
+                throw new Exception("SetMaterial: Color array must have at least 3 elements (RGB)");
+            }
+        }
+        
+        return new MaterialResult
+        {
+            success = true,
+            objectName = parameters.object_name,
+            materialName = renderer.material.name,
+            color = new float[] { 
+                renderer.material.color.r, 
+                renderer.material.color.g, 
+                renderer.material.color.b, 
+                renderer.material.color.a 
+            }
+        };
+    }
+
+    // Execute custom Unity code
+    private WarningResult ExecuteUnityCode(ExecuteCodeParams parameters)
+    {
+        if (parameters == null || string.IsNullOrEmpty(parameters.code))
+        {
+            Debug.LogError("ExecuteUnityCode: code is null or empty");
+            throw new Exception("ExecuteUnityCode: code is null or empty");
+        }
+        
+        Debug.LogWarning("ExecuteUnityCode: This functionality is limited for security reasons");
+        
+        return new WarningResult
+        {
+            warning = "ExecuteUnityCode: Custom code execution is not fully implemented for security reasons"
+        };
+    }
+
+    void OnApplicationQuit()
+    {
+        isRunning = false;
+        if (server != null)
+        {
+            server.Stop();
+            Debug.Log("Unity MCP Server stopped");
+        }
+    }
+}
