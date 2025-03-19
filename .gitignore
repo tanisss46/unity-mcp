@@ -1,19 +1,61 @@
-# Unity specific
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+.env/
+.venv/
+
+# Unity
 /[Ll]ibrary/
 /[Tt]emp/
 /[Oo]bj/
 /[Bb]uild/
 /[Bb]uilds/
 /[Ll]ogs/
-/[Uu]ser[Ss]ettings/
-
-# Python specific
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
-env/
-.env
+/[Mm]emoryCaptures/
+/[Uu]serSettings/
+/[Rr]ecordings/
+/[Aa]ssets/AssetStoreTools*
+.vs/
+.gradle/
+ExportedObj/
+.consulo/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
 
 # OS specific
 .DS_Store
@@ -21,4 +63,5 @@ env/
 ._*
 .Spotlight-V100
 .Trashes
+ehthumbs.db
 Thumbs.db

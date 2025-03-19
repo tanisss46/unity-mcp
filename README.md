@@ -1,247 +1,268 @@
-# Unity MCP Server
+# Unity MCP (Model Control Protocol)
 
-A Model-Context Protocol (MCP) server implementation for Unity, enabling communication and object manipulation within Unity environments through a standard interface.
-
-## Overview
-
-Unity MCP Server establishes a TCP-based communication protocol between Unity and external applications. It allows creation, modification, and deletion of objects in Unity scenes, as well as retrieval of scene information, all through a simple JSON-RPC based API.
+A simple yet powerful protocol for controlling Unity scenes through a TCP connection. This open-source project enables external applications to create, manipulate, and control Unity objects programmatically.
 
 ## Features
 
-- **Object Manipulation**: Create, modify, and delete 3D objects in Unity
-- **Material Management**: Apply materials and colors to objects
-- **Scene Information**: Retrieve detailed information about the current scene
-- **JSON-RPC Interface**: Clean, standardized communication protocol
-- **TCP Socket Communication**: Reliable communication between Unity and external applications
+- Create and manipulate 3D objects in Unity scenes
+- Apply materials and configure lighting
+- Create detailed characters with customization options
+- Add particle effects and physics properties
+- Control cameras and audio
+- Execute custom C# code in Unity
+- Simple JSON-RPC communication protocol
 
 ## Components
 
-The project consists of the following key components:
+1. **UnityMCPServer.cs** - Unity component that creates a TCP server and handles commands
+2. **unity_mcp_client.py** - Python client for communicating with the Unity server
+3. **Examples** - Demo scenes showing different features and capabilities
 
-1. **UnityMCPServer.cs**: Unity component that handles TCP connections and executes commands
-2. **unity_mcp_server.py**: Python server implementing the MCP protocol
-3. **unity_client.py**: Python client for communicating with the Unity server
-4. **config.py**: Configuration settings for the MCP server
+## Detailed Setup Guide
 
-## Installation
+### Unity Setup
 
-### Prerequisites
+1. Create a new Unity project or open your existing project
+2. Copy the `unitymcpserver.cs` file into your project's Assets folder
+   - You can create a new folder like `Assets/Scripts/` to keep things organized
+3. In your Unity scene, create an empty GameObject
+   - GameObject → Create Empty
+   - Rename it to "MCPServer"
+4. Attach the `UnityMCPServer` component to the GameObject
+   - Select the GameObject in the Hierarchy
+   - Click "Add Component" in the Inspector
+   - Type "UnityMCPServer" and select it
+5. Configure settings in the Inspector (optional)
+   - Port: Default is 8080, change if needed
+6. Make sure this GameObject is included in all scenes where you want to use MCP
+   - Consider making it a Prefab for easy reuse
+   - You can also use DontDestroyOnLoad to keep it persistent between scenes
 
-- Unity 2019.1 or newer
-- Python 3.8 or newer
-- Required Python packages: `asyncio`, `fastapi`, `asgi_tools`
+### Important: Starting Unity Before Using MCP
 
-### Setup
+The UnityMCPServer only accepts connections when Unity is in Play mode:
 
-1. **Unity Setup**:
-   - Add the `UnityMCPServer.cs` script to a GameObject in your scene
-   - Configure the port (default: 8080) in the Inspector if needed
+1. Open your Unity project with the UnityMCPServer component attached
+2. Press the Play button to enter Play mode
+3. Now the server is active and accepting connections
+4. **Keep Unity open and in Play mode** while using Claude or your Python client
 
-2. **Python Setup**:
+### Python Client Setup
+
+1. Ensure you have Python 3.6+ installed
+2. Copy the `unity_mcp_client.py` file to your project
+3. Install required packages:
    ```bash
-   # Create a virtual environment (optional but recommended)
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   
-   # Install required packages
-   pip install asyncio fastapi asgi_tools
+   pip install uuid
    ```
+4. For a proper installation, you can use the included setup.py:
+   ```bash
+   pip install -e .
+   ```
+   
+   > **Note:** Before publishing to PyPI or sharing, be sure to update the URL in setup.py to your actual repository URL.
+
+## Connecting with Claude or Other AI Tools
+
+When working with Claude or other AI assistants that use the Unity MCP:
+
+1. Start your Unity project and enter Play mode first
+2. Make sure the "MCPServer" GameObject is in your scene
+3. Keep Unity running while interacting with the AI
+4. The AI will connect to Unity through the MCP protocol
+5. If the connection fails, check that:
+   - Unity is in Play mode
+   - The MCPServer component is active
+   - The port settings match (default: 8080)
+   - No firewall is blocking the connection
 
 ## Usage
 
-### Starting the Server
+### Using the Python Client
 
-1. **Start Unity**: Open your Unity project with the UnityMCPServer component
-2. **Start the MCP Server**:
+```python
+from unity_mcp_client import UnityMCPClient, Colors
+
+# Create client connection
+client = UnityMCPClient(host="localhost", port=8080)
+
+# Create a simple cube
+cube = client.create_object("CUBE", "MyCube", [0, 1, 0])
+
+# Apply a material
+client.set_material("MyCube", color=Colors.BLUE)
+
+# Add physics
+client.add_rigidbody("MyCube", mass=2.0)
+
+# Create a light
+client.create_light("point", [5, 5, 5], intensity=2.0, color=Colors.rgb(255, 220, 150))
+
+# Create a character
+client.create_improved_character("human", [0, 0, 3], "Formal")
+```
+
+### Full Scene Creation Example
+
+Here's how to create a complete scene:
+
+```python
+from unity_mcp_client import UnityMCPClient, Colors, CharacterPresets
+
+# Create client
+client = UnityMCPClient()
+
+# Create environment
+floor = client.create_object("PLANE", "Floor", [0, 0, 0], [0, 0, 0], [20, 1, 20])
+client.set_material("Floor", "FloorMaterial", Colors.rgb(30, 30, 30))
+
+# Create walls
+wall1 = client.create_object("CUBE", "Wall1", [0, 2, 10], [0, 0, 0], [20, 4, 0.5])
+client.set_material("Wall1", color=Colors.rgb(200, 200, 200))
+
+wall2 = client.create_object("CUBE", "Wall2", [0, 2, -10], [0, 0, 0], [20, 4, 0.5])
+client.set_material("Wall2", color=Colors.rgb(200, 200, 200))
+
+# Lighting
+main_light = client.create_light("directional", [5, 10, 5], 1.0, Colors.rgb(255, 245, 230))
+accent_light = client.create_light("point", [-5, 2, 5], 2.0, Colors.rgb(255, 150, 100))
+
+# Create characters
+character = client.create_improved_character("human", [0, 0, 0], "Casual")
+
+# Set up camera
+camera = client.create_camera("mainCamera", [0, 5, -10], None, 60)
+client.set_active_camera("mainCamera")
+```
+
+### Running the Included Examples
+
+We've included ready-to-use examples in the `examples/` directory:
+
+1. Make sure Unity is running with the UnityMCPServer active
+2. Run an example script:
    ```bash
-   python -m unity_mcp_server
+   python examples/basic_scene.py
    ```
+3. Watch as the scene is created in real-time in Unity
 
-### Commands and API Reference
+## Troubleshooting
 
-The MCP server supports the following commands:
+### Unity Side
 
-#### get_scene_info
+- **Server not starting**: Make sure the UnityMCPServer component is attached to an active GameObject
+- **Connection refused**: Check if Unity is in Play mode
+- **Objects not appearing**: Check your scene's camera position, objects might be created out of view
 
-Retrieves detailed information about the current Unity scene.
+### Python Side
 
-```python
-result = await unity_client.send_command("get_scene_info", {})
-```
+- **Connection error**: Make sure Unity is running and in Play mode
+- **Name conflicts**: If creating objects fails, the name might already be taken. Use unique names
+- **Parameter errors**: Check the parameter types and formats (arrays for positions, etc.)
 
-#### get_object_info
+## API Reference
 
-Gets properties of a specific object.
+### Basic Objects
 
-```python
-result = await unity_client.send_command("get_object_info", {
-    "object_name": "Cube1"
-})
-```
+- `create_object(obj_type, name, location, rotation, scale)` - Create a 3D primitive
+- `modify_object(name, location, rotation, scale, visible)` - Update object properties
+- `delete_object(name)` - Remove an object from the scene
+- `set_material(object_name, material_name, color)` - Apply a material to an object
 
-#### create_object
+### Characters
 
-Creates a new object in the Unity scene.
+- `create_improved_character(character_type, position, outfit_type, has_weapon, weapon_type, ...)` - Create a detailed character
 
-```python
-result = await unity_client.send_command("create_object", {
-    "type": "CUBE",  # CUBE, SPHERE, CYLINDER, PLANE, EMPTY, CAPSULE, QUAD
-    "name": "MyCube",
-    "location": [0, 1, 0],
-    "rotation": [0, 45, 0],
-    "scale": [1, 1, 1]
-})
-```
+### Environment
 
-#### modify_object
+- `create_terrain(width, length, height, heightmap)` - Create a terrain
+- `create_water(width, length, height)` - Create a water surface
+- `create_skybox(sky_type, color)` - Create a skybox
 
-Modifies an existing object's properties.
+### Lighting & Effects
 
-```python
-result = await unity_client.send_command("modify_object", {
-    "name": "MyCube",
-    "location": [0, 2, 0],
-    "rotation": [0, 90, 0],
-    "scale": [2, 2, 2],
-    "visible": True
-})
-```
+- `create_light(light_type, position, intensity, color, ...)` - Create a light
+- `create_particle_system(effect_type, position, scale, ...)` - Create particle effects
 
-#### delete_object
+### Physics
 
-Deletes an object from the scene.
+- `add_rigidbody(object_name, mass, use_gravity)` - Add physics to an object
+- `apply_force(object_name, force, mode)` - Apply physics forces
 
-```python
-result = await unity_client.send_command("delete_object", {
-    "name": "MyCube"
-})
-```
+### Camera & Audio
 
-#### set_material
+- `create_camera(camera_type, position, target, field_of_view, ...)` - Create a camera
+- `set_active_camera(camera_name)` - Set the active camera
+- `play_sound(sound_type, position, volume)` - Play a sound effect
+- `create_audio_source(object_name, audio_type, loop, volume, ...)` - Add an audio source
 
-Assigns a material and/or color to an object.
+### Utilities
 
-```python
-result = await unity_client.send_command("set_material", {
-    "object_name": "MyCube",
-    "material_name": "MyMaterial",  # Optional
-    "color": [1.0, 0.0, 0.0]  # RGB values (0-1)
-})
-```
+- `get_scene_info()` - Get information about the current scene
+- `get_object_info(object_name)` - Get information about a specific object
+- `execute_unity_code(code)` - Execute custom C# code in Unity
 
-#### execute_unity_code
+## Helper Classes
 
-Executes custom C# code in Unity (limited functionality for security reasons).
+### Colors
+
+Predefined colors and utilities for working with colors:
 
 ```python
-result = await unity_client.send_command("execute_unity_code", {
-    "code": "Debug.Log(\"Hello from Python!\");"
-})
+# Using predefined colors
+Colors.RED    # [1.0, 0.0, 0.0, 1.0]
+Colors.BLUE   # [0.0, 0.0, 1.0, 1.0]
+Colors.GREEN  # [0.0, 1.0, 0.0, 1.0]
+
+# Using RGB (0-255 range)
+Colors.rgb(255, 100, 50)  # Converts to [1.0, 0.39, 0.19, 1.0]
+
+# Interpolating between colors
+Colors.lerp(Colors.RED, Colors.BLUE, 0.5)  # Purple: [0.5, 0.0, 0.5, 1.0]
 ```
 
-## Example
+### Character Presets
 
-Here's a complete example of creating and manipulating objects:
+Predefined character configurations:
 
 ```python
-import asyncio
-from unity_client import UnityClient
-
-async def main():
-    # Connect to Unity
-    client = UnityClient(host="localhost", port=8080)
-    await client.connect()
-    
-    try:
-        # Get scene info
-        scene_info = await client.send_command("get_scene_info", {})
-        print(f"Scene name: {scene_info['name']}")
-        
-        # Create a cube
-        cube = await client.send_command("create_object", {
-            "type": "CUBE",
-            "name": "PythonCube",
-            "location": [0, 1, 0]
-        })
-        print(f"Created cube: {cube['name']}")
-        
-        # Apply a red material
-        await client.send_command("set_material", {
-            "object_name": "PythonCube",
-            "color": [1.0, 0.0, 0.0]
-        })
-        
-        # Move the cube
-        await client.send_command("modify_object", {
-            "name": "PythonCube",
-            "location": [0, 2, 0],
-            "rotation": [0, 45, 0]
-        })
-        
-        # Get object info
-        object_info = await client.send_command("get_object_info", {
-            "object_name": "PythonCube"
-        })
-        print(f"Object position: {object_info['position']}")
-        
-    finally:
-        # Disconnect
-        await client.disconnect()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+# Using a preset
+gunman = CharacterPresets.GUNMAN.copy()
+gunman["position"] = [0, 0, 5]
+client.create_improved_character(**gunman)
 ```
 
-## Architecture
+### Material Presets
 
-The system uses a client-server architecture:
+Predefined material configurations:
 
-1. **Unity (TCP Server)**: 
-   - Listens for incoming connections
-   - Processes JSON-RPC commands
-   - Executes operations in the Unity environment
-
-2. **Python MCP Server (Middleware)**:
-   - Implements the MCP protocol
-   - Routes commands to the Unity server
-   - Handles command validation and error handling
-
-3. **Python Client**:
-   - Provides a simple API for applications to communicate with Unity
-   - Handles connection management and command formatting
-
-## JSON-RPC Protocol
-
-All communication uses the JSON-RPC 2.0 protocol. Requests take the form:
-
-```json
-{
-    "jsonrpc": "2.0",
-    "method": "create_object",
-    "params": {
-        "type": "CUBE",
-        "name": "MyCube"
-    },
-    "id": "1"
-}
+```python
+# Using a material preset 
+metal = MaterialPresets.METAL.copy()
+metal["albedoColor"] = Colors.GOLD
+# Use with advanced material API
 ```
 
-Responses take the form:
+## Using with LLMs (Like Claude)
 
-```json
-{
-    "jsonrpc": "2.0",
-    "result": {
-        "success": true,
-        "name": "MyCube",
-        "position": [0, 1, 0],
-        "rotation": [0, 0, 0],
-        "scale": [1, 1, 1],
-        "active": true
-    },
-    "id": "1"
-}
-```
+When using UnityMCP with Large Language Models (LLMs) like Claude:
+
+1. Start Unity and make sure the UnityMCPServer is active (in Play mode)
+2. In your conversation with the LLM, explain that Unity is running with the MCP server
+3. The LLM can generate Python code using the unity_mcp_client to create scenes
+4. Execute the generated code to see the results in Unity
+5. Share feedback with the LLM to refine the scene
+
+Example workflow:
+1. Ask Claude: "Create a simple village scene in Unity"
+2. Claude generates Python code using unity_mcp_client
+3. Run the code while Unity is in Play mode
+4. Tell Claude: "The houses are too large, make them smaller"
+5. Claude generates updated code that modifies the scene
+
+## Screenshots and Documentation
+
+> **Note to Repo Owner:** Consider adding screenshots of examples created with UnityMCP to make the README more visual. You can add images to the `images/` directory and reference them in this README with Markdown syntax: `![Description](images/screenshot.png)`
 
 ## License
 
@@ -251,7 +272,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Acknowledgments
-
-- Unity Technologies for providing the Unity game engine
-- The MCP protocol specification
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
